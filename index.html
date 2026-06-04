@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oil Well Production Analysis | Multi-Well Dashboard</title>
+    <meta name="description" content="A browser-based tool for analyzing multiple oil wells, fitting BDF and ARPS curve declines, and viewing summary statistics.">
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Main Style -->
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- SheetJS (XLSX) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <h1 class="glow-text">Oil Well Analysis Dashboard</h1>
+            <p class="subtitle">Multi-Well Decline Curve & Performance Diagnostics</p>
+            
+            <!-- Navigation Tabs -->
+            <nav class="nav-tabs">
+                <button class="nav-btn active" data-target="view-upload">1. Upload Data</button>
+                <button class="nav-btn" data-target="view-analysis" id="nav-analysis-btn" disabled>2. Well Analysis</button>
+                <button class="nav-btn" data-target="view-summary" id="nav-summary-btn" disabled>3. Summary & Export</button>
+            </nav>
+        </header>
+
+        <main>
+            <!-- 1. UPLOAD VIEW -->
+            <div id="view-upload" class="view-panel active">
+                <div class="panel glass">
+                    <div class="panel-header">
+                        <h2>Upload Production Data</h2>
+                        <span class="badge">Drag & Drop CSV / Excel</span>
+                    </div>
+                    
+                    <div class="upload-grid">
+                        <div class="upload-area" id="upload-area">
+                            <input type="file" id="csv-file-input" accept=".csv, .xlsx, .xls" style="display: none;">
+                            <div class="upload-icon">📁</div>
+                            <p>Drag & drop your CSV or Excel here, or <span class="browse-link" id="browse-link">browse files</span></p>
+                            <span class="file-info" id="file-info-label">No file selected</span>
+                        </div>
+                        
+                        <div class="upload-instructions">
+                            <h3>File Format Guidelines</h3>
+                            <p>Your file (CSV or Excel) should contain the following fields. It's okay if there are other columns; you will map them below:</p>
+                            <ul>
+                                <li><strong>Well Identifier</strong> (API Number or Well Name - e.g., string or number)</li>
+                                <li><strong>Date / Time</strong> (Unix timestamp in seconds)</li>
+                                <li><strong>Production Volume</strong> (Daily or monthly volume in barrels/day or cumulative)</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Column Mapping Panel (Shows up after file selection) -->
+                    <div id="mapping-controls" class="mapping-container" style="display: none;">
+                        <div class="mapping-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.5rem;">
+                            <h3 style="margin: 0;">Map Columns</h3>
+                            <div class="checkbox-container" style="display: flex; align-items: center; gap: 0.5rem;">
+                                <input type="checkbox" id="has-headers-checkbox" checked style="width: 1.1rem; height: 1.1rem; cursor: pointer;">
+                                <label for="has-headers-checkbox" style="font-weight: 600; cursor: pointer; font-size: 0.85rem; color: var(--text-dim);">First row contains headers</label>
+                            </div>
+                        </div>
+                        <div class="mapping-grid">
+                            <div class="control-group">
+                                <label for="map-well-id">Well Identifier Column:</label>
+                                <select id="map-well-id" class="mapping-select"></select>
+                            </div>
+                            <div class="control-group">
+                                <label for="map-date">Time Column (Unix timestamp):</label>
+                                <select id="map-date" class="mapping-select"></select>
+                            </div>
+                            <div class="control-group">
+                                <label for="map-date-format">Time Column Format:</label>
+                                <select id="map-date-format" class="mapping-select">
+                                    <option value="seconds" selected>Seconds since Unix Epoch</option>
+                                    <option value="excel">Excel Serial Date (days since Jan 1, 1900)</option>
+                                </select>
+                            </div>
+                            <div class="control-group">
+                                <label for="map-volume">Production Volume Column:</label>
+                                <select id="map-volume" class="mapping-select"></select>
+                            </div>
+                            <div class="control-group">
+                                <div class="slider-header">
+                                    <label for="default-sensitivity-slider">Default Outlier Sensitivity:</label>
+                                    <span id="default-sensitivity-value" class="slider-value">0%</span>
+                                </div>
+                                <input type="range" id="default-sensitivity-slider" min="0" max="50" value="0" step="1" class="slider">
+                            </div>
+                        </div>
+                        <div class="controls">
+                            <button id="process-csv-btn" class="primary-btn">Parse & Load Wells</button>
+                        </div>
+                    </div>
+
+                    <!-- CSV Preview Table -->
+                    <div id="csv-preview-container" class="preview-container" style="display: none;">
+                        <h3>CSV Preview (First 5 Rows)</h3>
+                        <div class="table-scroll">
+                            <table id="csv-preview-table" class="preview-table">
+                                <!-- Dynamically populated -->
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. ANALYSIS VIEW -->
+            <div id="view-analysis" class="view-panel">
+                <div class="dashboard-grid">
+                    <!-- Sidebar: Well Selector -->
+                    <aside class="sidebar glass">
+                        <div class="sidebar-header">
+                            <h3>Wells List</h3>
+                            <input type="text" id="well-search" placeholder="Search Well ID/Name..." class="search-input">
+                        </div>
+                        <div class="well-list-container">
+                            <ul id="wells-list">
+                                <!-- Dynamically populated list of Well IDs -->
+                            </ul>
+                        </div>
+                        <div class="sidebar-footer">
+                            <button id="prev-well-btn" class="secondary-btn">Prev</button>
+                            <span id="current-well-info">0 / 0</span>
+                            <button id="next-well-btn" class="secondary-btn">Next</button>
+                        </div>
+                    </aside>
+
+                    <!-- Workspace: Analysis & Charts -->
+                    <div class="workspace">
+                        <!-- Left Panel: Parameters -->
+                        <section class="panel controls-panel glass">
+                            <div class="panel-header">
+                                <h2 id="active-well-name">No Well Selected</h2>
+                                <span class="badge" id="active-well-badge">Well ID: --</span>
+                            </div>
+
+                            <!-- BDF Section -->
+                            <div class="decline-section">
+                                <div class="section-header-title">
+                                    <h3>Boundary Dominated Flow (BDF)</h3>
+                                </div>
+
+                                <!-- Time Basis Toggle -->
+                                <div class="toggle-container">
+                                    <span class="toggle-label">Time Basis:</span>
+                                    <div class="toggle-group">
+                                        <input type="radio" id="time-prod-analysis" name="time-basis-analysis" value="production" checked>
+                                        <label for="time-prod-analysis">Production Time</label>
+                                        <input type="radio" id="time-mbt-analysis" name="time-basis-analysis" value="mbt">
+                                        <label for="time-mbt-analysis">MBT</label>
+                                    </div>
+                                </div>
+
+                                <!-- Outlier Sensitivity Slider -->
+                                <div class="slider-container">
+                                    <div class="slider-header">
+                                        <span class="slider-label">Outlier Sensitivity:</span>
+                                        <span id="sensitivity-value-analysis" class="slider-value">0%</span>
+                                    </div>
+                                    <input type="range" id="sensitivity-slider-analysis" min="0" max="50" value="0" step="1" class="slider">
+                                </div>
+
+                                <!-- Stats Grid -->
+                                <div class="stats-grid">
+                                    <div class="stat-item">
+                                        <span class="stat-label">Points Count</span>
+                                        <span id="point-count-analysis" class="stat-value">--</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">IP (q<sub>i</sub>)</span>
+                                        <span id="ip-val-analysis" class="stat-value">--</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">TTD (Real Months)</span>
+                                        <span id="ttd-real-val" class="stat-value">--</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">TTD (MBT Months)</span>
+                                        <span id="ttd-mbt-val" class="stat-value">--</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">TTD (Real Days)</span>
+                                        <span id="ttd-real-days" class="stat-value">--</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">TTD (MBT Days)</span>
+                                        <span id="ttd-mbt-days" class="stat-value">--</span>
+                                    </div>
+                                    <div class="stat-item full-width">
+                                        <span class="stat-label">Model SSE</span>
+                                        <span id="sse-val-analysis" class="stat-value">--</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Future ARPS decline curve placeholder -->
+                            <div class="decline-section future-arps">
+                                <div class="section-title-with-badge">
+                                    <h3>ARPS Decline Fit</h3>
+                                    <span class="badge secondary">Planned</span>
+                                </div>
+                                <p class="description">Future integration will fit the exponential tail transition using Arps equations.</p>
+                                <div class="form-grid">
+                                    <div class="input-field">
+                                        <label>Decline Rate (D<sub>i</sub>)</label>
+                                        <input type="text" placeholder="Pending Match" disabled class="placeholder-input">
+                                    </div>
+                                    <div class="input-field">
+                                        <label>Arps b-factor</label>
+                                        <input type="text" placeholder="Pending Match" disabled class="placeholder-input">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Right Panel: Visualization -->
+                        <section class="panel visualization-panel glass">
+                            <div class="panel-header">
+                                <h2>Log-Log Graph</h2>
+                                <div class="chart-legend">
+                                    <span class="legend-item"><span class="dot actual"></span> Actual Production</span>
+                                    <span class="legend-item"><span class="dot trend"></span> BDF Trend</span>
+                                    <span class="legend-item"><span class="dot outlier-dot"></span> Outlier Excluded</span>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="analysis-chart"></canvas>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. SUMMARY VIEW -->
+            <div id="view-summary" class="view-panel">
+                <div class="summary-container">
+                    <!-- Global KPIs -->
+                    <div class="kpi-grid">
+                        <div class="kpi-card glass">
+                            <h3>Total Wells Loaded</h3>
+                            <span id="summary-total-wells" class="kpi-value">0</span>
+                        </div>
+                        <div class="kpi-card glass">
+                            <h3>Average IP (q<sub>i</sub>)</h3>
+                            <span id="summary-avg-ip" class="kpi-value">--</span>
+                        </div>
+                        <div class="kpi-card glass">
+                            <h3>Avg Time to BDF (Real Time)</h3>
+                            <span id="summary-avg-ttd-real" class="kpi-value">--</span>
+                        </div>
+                        <div class="kpi-card glass">
+                            <h3>Avg Time to BDF (MBT)</h3>
+                            <span id="summary-avg-ttd-mbt" class="kpi-value">--</span>
+                        </div>
+                    </div>
+
+                    <!-- Two Cumulative Distribution Charts Side-by-Side -->
+                    <div class="summary-charts-grid">
+                        <section class="panel chart-panel glass">
+                            <div class="panel-header">
+                                <h2>CDF: Time to BDF (Real Time)</h2>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="cdf-real-chart"></canvas>
+                            </div>
+                        </section>
+                        <section class="panel chart-panel glass">
+                            <div class="panel-header">
+                                <h2>CDF: Time to BDF (Material Balance Time)</h2>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="cdf-mbt-chart"></canvas>
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Summary Table -->
+                    <section class="panel table-panel glass">
+                        <div class="panel-header">
+                            <h2>All Wells Summary Table</h2>
+                            <button id="export-csv-btn" class="primary-btn">💾 Export results CSV</button>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="summary-table">
+                                <thead>
+                                    <tr>
+                                        <th>Well ID / Name</th>
+                                        <th>Data Points</th>
+                                        <th>IP (q<sub>i</sub>, bbl/d)</th>
+                                        <th>TTD Real (Days)</th>
+                                        <th>TTD Real (Months)</th>
+                                        <th>TTD MBT (Days)</th>
+                                        <th>TTD MBT (Months)</th>
+                                        <th>BDF SSE</th>
+                                        <th>ARPS status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="summary-table-body">
+                                    <tr>
+                                        <td colspan="9" class="empty-state">No data uploaded yet. Go to Upload Data to load production records.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 Oil Well Analysis Tool. Built for multi-well regression and curve matching.</p>
+        </footer>
+    </div>
+
+    <!-- Application Script -->
+    <script src="app.js"></script>
+</body>
+</html>
